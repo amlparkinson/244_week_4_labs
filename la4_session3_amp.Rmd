@@ -1,0 +1,189 @@
+---
+title: "Lab4a_aka session 3"
+author: "Anne-Marie Parkinson"
+date: "January 30, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Packages 
+```{r, include = F}
+library(tidyverse)
+library(sf)
+library(tmap)
+library(janitor)
+```
+# Load data
+
+```{r}
+
+ca_eco <- read_sf(dsn = "session_3_materials", layer = "ca_eco") %>% 
+  clean_names() %>% 
+  select(us_l3name) %>% 
+  rename(region = us_l3name) %>% 
+  st_simplify(dTolerance = 100) # simplifies num of points used to create a polygon (makes the maps appear faster. Careful when simplify spatial data though. Use a dTolerance value of 100000 and get very incorrect looking map!). Can also use rmapshaper::ms_simplify() or geos::gSimplify() to simplify polygons of spatial data.
+
+#dsn functions like here function. If the rproj and the spatial data are in the same folder use dsn = "."
+
+ca_counties <- read_sf(dsn = "session_3_materials", layer = "california_county_shape_file") %>% 
+  clean_names()
+
+ca_dams <- read_sf(dsn = "session_3_materials", layer = "California_Jurisdictional_Dams")
+
+
+```
+
+```{r}
+plot(ca_eco)
+# check coord system del spatial data
+st_crs(ca_eco) # theres no epsg code for this data, but can set it ourselves
+st_crs(ca_counties)
+st_crs(ca_dams)
+
+# two ways to set the coord system
+ca_eco <- ca_eco %>% 
+  st_transform(crs = 4326)
+st_crs(ca_counties) = 4326 
+
+# make sure coord system of spatial layers are the same!!!
+```
+
+
+# make a map of dams in CA overlaid onto ecoregions with outlines of CA counties
+
+```{r}
+
+ggplot(data = ca_counties) + 
+  geom_sf(color = "black", size = 0.1) +
+  geom_sf(data = ca_eco, 
+          aes(fill = region),
+              alpha = 0.5,   # have two spatial data sets, but can only see one, so use alphs to make both visible. 
+              color = "NA") + # color here is refering to the color of the line between polygons 
+  geom_sf(data = ca_dams, size = 0.5, alpha = 0.5, size = 0.5) +
+  theme_minimal()
+```
+
+
+# only want data in SB county. So use function to find where the data in these layers overlap
+
+```{r}
+#first, use filter to get sub data with just sb county
+
+sb_county <- ca_counties %>% 
+  filter (name == "Santa Barbara")
+  
+# clip eco-region to include only information within SB county
+
+eco_clip <- st_intersection(ca_eco, sb_county)
+  
+# lets plot it!
+
+ggplot() +
+  geom_sf (data = ca_counties, 
+           fill = "grey90", 
+           color = "grey80", 
+           size = 0.2) +
+  geom_sf(data = eco_clip,
+          aes(fill = region),
+          color = 'white',
+          size = 0.4) +
+  coord_sf(xlim = c(-121, -119),
+           ylim = c(33.5, 35.5)) +  # essentially crops the map to within these specified coords
+  theme_minimal()
+
+```
+
+
+
+# interactive map %>% 
+
+```{r}
+
+sb_clip_map <- tm_basemap("Esri.WorldImagery") + # use ?tm_basemap in the console to get link to website that shows all the potential basemaps avail
+  tm_shape(eco_clip) +
+  tm_fill("region", palette = c("orange", "purple", "yellow"), alpha = 0.5)  # using "region" is anagolous to using aes(fill=region) in ggplot to tell R waht to base the color of the polygons on
+
+tmap_mode("view") # defalt is static, view is interactive map so need this line of code before the name of the graph. the interactivness is maintained when the file is knitted. Need interactive mode for the basemap to show up
+sb_clip_map
+
+```
+
+# convert latitude and longitude from excel into data that R will recognize as spatial data
+
+```{r}
+# make mock data using tribble() so can trouble shoot and get the code working on small data set first
+
+my_example <- tribble (
+  ~id, ~lon, ~lat,  #create column names using this format
+  "tiger", -119.4, 34.35, # data for the first row, words need " ", while numbers dont
+  "lion", -119.41, 34.39,
+  "bear", -119.43, 34.38
+)
+
+# use class(my_example) to see if R recognizes this as spatial data or as a table. In this case, R recognizes it as a table
+
+# convert to sf data
+animals_sf <- st_as_sf(my_example, coords = c('lon', 'lat'), crs = 4326) # tell R which columns have the coords for longitude and latitude, IN THAT ORDER!!!
+
+#use class(animals_sf) to maek sure r recognizes it as sf data#
+```
+
+
+# make a tmap
+
+```{r}
+animal_map <- tm_basemap("Stamen.Watercolor") +
+  tm_shape(animals_sf) + # use tm_shape for polygon data and tm_dots for point data, but (need to?) include tm_shape here along with tm_dots, no tm dots code will get an error
+  tm_dots(labels = "id", col = "purple", size = 0.5) 
+# dont need tm_map(view) bc est that setting earlier
+# when hover mouse over the fire, will get the info for that point that was specified in labels = ..
+
+```
+
+# chloropleth of dams
+
+```{r}
+intersection <- st_intersection(x = ca_dams, y = ca_counties)
+
+dams_per_county <- intersection %>% 
+  group_by(name) %>% 
+  tally() # tally here performs the same fucntion as count()
+
+ca_tot <- ca_counties %>% 
+  st_join(dams_per_county) %>% 
+  select(name.x, n) %>% 
+  rename (name = name.x)
+
+# convert NAs to zeros
+ca_tot_zero <- ca_tot %>% 
+  replace_na(list(n = 0)) # use list when want to perform this function for multiple columns; this says where ever in the column named n, replace any NA calues with 0  
+
+# geometry is kept when perform all these join/filter/select functions
+
+
+```
+
+```{r}
+# plot!
+
+ggplot() +
+  geom_sf(data=ca_tot_zero,
+          aes(fill = n),
+          size = 0.2,
+          color = "white") +
+  scale_fill_continuous(low = "yellow", high = "red") #manunally assign a color scheme. use high and low for continous data
+
+
+
+```
+
+
+places for more resources for sf data:
+
+- vignettes for sf (google this, sf package in github)
+- "geocomputation with R" by Robin Lovelace
+
+
